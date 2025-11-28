@@ -1,105 +1,148 @@
 package main
 
 import (
-	"fmt"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"os"
+	"github.com/charmbracelet/lipgloss"
+	"strings"
+)
+
+var (
+	activeBorder   = lipgloss.Color("12")
+	inactiveBorder = lipgloss.Color("8")
 )
 
 type model struct {
-	choices  []string
-	cursor   int
-	selected map[int]struct{}
-}
-
-func initialModel() model {
-	return model{
-		choices:  []string{"Buy carrots", "Buy celery", "Buy kohlrabi"},
-		selected: make(map[int]struct{}),
-	}
+	viewport          viewport.Model
+	currentChoices    []string
+	choiceCursor      int
+	windowWidth       int
+	windowHeight      int
+	choiceAreaFocused bool
 }
 
 func (m model) Init() tea.Cmd {
-	// Just return `nil`, which means "no I/O right now, please."
 	return nil
+}
+
+const sidebarWidth = 30
+
+func (m model) getMainWidth() int {
+	return m.windowWidth - (sidebarWidth + 1)
+}
+func (m model) getChoiceHeight() int {
+	return len(m.currentChoices) + 2
+}
+func (m model) getMainHeight() int {
+	return m.windowHeight - (m.getChoiceHeight() + 2)
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		// Window sizing
+		m.windowWidth = msg.Width - 2
+		m.windowHeight = msg.Height - 2
 
-	// Is it a key press?
+		m.viewport.Width = m.getMainWidth()
+		m.viewport.Height = m.getMainHeight()
+
 	case tea.KeyMsg:
-
-		// Cool, what was the actual key pressed?
+		// Overall key inputs
 		switch msg.String() {
-
-		// These keys should exit the program.
-		case "ctrl+c", "q":
+		case "q", "ctrl+c":
 			return m, tea.Quit
-
-		// The "up" and "k" keys move the cursor up
-		case "up", "k":
-			if m.cursor > 0 {
-				m.cursor--
-			}
-
-		// The "down" and "j" keys move the cursor down
-		case "down", "j":
-			if m.cursor < len(m.choices)-1 {
-				m.cursor++
-			}
-
-		// The "enter" key and the spacebar (a literal space) toggle
-		// the selected state for the item that the cursor is pointing at.
-		case "enter", " ":
-			_, ok := m.selected[m.cursor]
-			if ok {
-				delete(m.selected, m.cursor)
-			} else {
-				m.selected[m.cursor] = struct{}{}
-			}
+		case "tab":
+			m.choiceAreaFocused = !m.choiceAreaFocused
 		}
 	}
 
-	// Return the updated model to the Bubble Tea runtime for processing.
-	// Note that we're not returning a command.
-	return m, nil
+	var cmd tea.Cmd
+	if m.choiceAreaFocused {
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			switch msg.String() {
+			case "up", "k":
+				if m.choiceCursor > 0 {
+					m.choiceCursor--
+				}
+			case "down", "j":
+				if m.choiceCursor < len(m.currentChoices)-1 {
+					m.choiceCursor++
+				}
+			case "enter":
+				// Handle selection
+			}
+		}
+	} else {
+		m.viewport, cmd = m.viewport.Update(msg)
+	}
+
+	return m, cmd
+}
+
+func condColor(cond bool, yes, no lipgloss.TerminalColor) lipgloss.TerminalColor {
+	if cond {
+		return yes
+	}
+	return no
 }
 
 func (m model) View() string {
-	// The header
-	s := "What should we buy at the market?\n\n"
+	lw := m.getMainWidth()
+	ch := m.getChoiceHeight()
+	vh := m.getMainHeight()
 
-	// Iterate over our choices
-	for i, choice := range m.choices {
+	rightStyle := lipgloss.NewStyle().
+		Width(sidebarWidth).
+		Height(m.windowHeight).
+		PaddingLeft(1)
 
-		// Is the cursor pointing at this choice?
-		cursor := " " // no cursor
-		if m.cursor == i {
-			cursor = ">" // cursor!
+	viewportStyle := lipgloss.NewStyle().
+		Width(lw).
+		Height(vh - 2).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(condColor(m.choiceAreaFocused, inactiveBorder, activeBorder)).
+		PaddingLeft(6)
+
+	choiceStyle := lipgloss.NewStyle().
+		Width(lw).
+		Border(lipgloss.RoundedBorder()).
+		Height(ch - 2).
+		BorderForeground(condColor(m.choiceAreaFocused, activeBorder, inactiveBorder))
+
+	// Build choices
+	var choiceContent string
+	for i, c := range m.currentChoices {
+		cursor := "  "
+		if i == m.choiceCursor {
+			cursor = "> "
 		}
-
-		// Is this choice selected?
-		checked := " " // not selected
-		if _, ok := m.selected[i]; ok {
-			checked = "x" // selected!
-		}
-
-		// Render the row
-		s += fmt.Sprintf("%s [%s] %s\n", cursor, checked, choice)
+		choiceContent += cursor + c + "\n"
 	}
 
-	// The footer
-	s += "\nPress q to quit.\n"
+	// Left column: viewport stacked on choices
+	leftColumn := lipgloss.JoinVertical(
+		lipgloss.Left,
+		viewportStyle.Render(m.viewport.View()),
+		choiceStyle.Render(choiceContent),
+	)
 
-	// Send the UI for rendering
-	return s
+	// Right column
+	rightColumn := rightStyle.Render("lorem ipsum")
+
+	full := lipgloss.JoinHorizontal(lipgloss.Top, leftColumn, rightColumn)
+	return lipgloss.NewStyle().Padding(1).Render(full)
 }
 
 func main() {
-	p := tea.NewProgram(initialModel())
-	if _, err := p.Run(); err != nil {
-		fmt.Printf("Alas, there's been an error: %v", err)
-		os.Exit(1)
+	m := model{
+		viewport:          viewport.New(80, 20),
+		currentChoices:    []string{"Option A", "Option B", "Option C"},
+		choiceAreaFocused: true,
 	}
+	m.viewport.SetContent("Your scrollable content here...\n" + strings.Repeat("Line\n", 50))
+
+	p := tea.NewProgram(m, tea.WithAltScreen())
+	p.Run()
 }
